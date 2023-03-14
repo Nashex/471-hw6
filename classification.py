@@ -7,6 +7,7 @@ import evaluate as evaluate
 from transformers import get_scheduler
 from transformers import AutoModelForSequenceClassification
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 import argparse
 import subprocess
 
@@ -144,7 +145,7 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, device, 
 
         print(f"Epoch {epoch + 1} training:")
 
-        for i, batch in enumerate(train_dataloader):
+        for i, batch in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
 
             """
             You need to make some changes here to make this function work.
@@ -205,7 +206,7 @@ def plot_accuracies(train_accuracies, validation_accuracies):
     plt.xlim(0, len(train_accuracies) - 1)
     plt.title('Training and Validation Accuracy of Model')
     plt.legend()
-    plt.savefig('accuracy.png')
+    plt.savefig('accuracy3.png')
 
 
 def pre_process(model_name, batch_size, device, small_subset):

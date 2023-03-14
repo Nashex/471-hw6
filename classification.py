@@ -6,6 +6,7 @@ from datasets import load_dataset
 import evaluate as evaluate
 from transformers import get_scheduler
 from transformers import AutoModelForSequenceClassification
+import matplotlib.pyplot as plt
 import argparse
 import subprocess
 
@@ -128,6 +129,10 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, device, 
 
     loss = torch.nn.CrossEntropyLoss()
 
+    # we'll store the training and validation losses in these lists
+    train_accuracies = []
+    validation_accuracies = []
+
     for epoch in range(num_epochs):
 
         # put the model in training mode (important that this is done each epoch,
@@ -154,27 +159,53 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, device, 
             Then, compute the accuracy using the logits and the labels.
             """
 
-            input_ids = ...
-            attention_mask = ...
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
 
-            output = mymodel(...)
-            predictions = ...
-            model_loss = loss(...)
+            output = mymodel(input_ids=input_ids, attention_mask=attention_mask)
+            predictions = output.logits
+            labels = batch['labels'].to(device)
+            model_loss = loss(predictions, labels)
 
-            ...
-
+            model_loss.backward()
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            
             predictions = torch.argmax(predictions, dim=1)
 
             # update metrics
             train_accuracy.add_batch(predictions=predictions, references=batch['labels'])
 
         # print evaluation metrics
+        train_acc = train_accuracy.compute()
         print(f" ===> Epoch {epoch + 1}")
-        print(f" - Average training metrics: accuracy={train_accuracy.compute()}")
+        print(f" - Average training metrics: accuracy={train_acc}")
+        train_accuracies.append(train_acc['accuracy'])
 
         # normally, validation would be more useful when training for many epochs
         val_accuracy = evaluate_model(mymodel, validation_dataloader, device)
         print(f" - Average validation metrics: accuracy={val_accuracy}")
+        validation_accuracies.append(val_accuracy['accuracy'])
+    
+    # plot the training and validation losses
+    plot_accuracies(train_accuracies, validation_accuracies)
+  
+def plot_accuracies(train_accuracies, validation_accuracies):
+    """ Plot the training and validation accuracies
+
+    :param list train_accuracies: list of training accuracies
+    :param list validation_accuracies: list of validation accuracies
+    :return None
+    """
+    plt.plot(train_accuracies, label='train')
+    plt.plot(validation_accuracies, label='validation')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.xlim(0, len(train_accuracies) - 1)
+    plt.title('Training and Validation Accuracy of Model')
+    plt.legend()
+    plt.savefig('accuracy.png')
 
 
 def pre_process(model_name, batch_size, device, small_subset):
@@ -268,13 +299,13 @@ if __name__ == "__main__":
                                                                                              args.small_subset)
 
     print(" >>>>>>>>  Starting training ... ")
-    train(...)
+    train(pretrained_model, args.num_epochs, train_dataloader, validation_dataloader, args.device, args.lr)
 
     # print the GPU memory usage just to make sure things are alright
     print_gpu_memory()
 
-    val_accuracy = ...
+    val_accuracy = evaluate_model(pretrained_model, validation_dataloader, args.device)
     print(f" - Average DEV metrics: accuracy={val_accuracy}")
 
-    test_accuracy = ...
+    test_accuracy = evaluate_model(pretrained_model, test_dataloader, args.device)
     print(f" - Average TEST metrics: accuracy={test_accuracy}")

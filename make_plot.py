@@ -29,4 +29,4 @@ ax.legend()
 ax.set_title("Model Accuracies")
 
 # Save the plot
-fig.savefig("model_accuracies.png")
+fig.savefig("figures/model_accuracies.png")

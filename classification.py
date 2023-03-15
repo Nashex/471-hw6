@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import argparse
 import subprocess
+import pandas as pd
 
 
 def print_gpu_memory():
@@ -190,15 +191,17 @@ def train(mymodel, num_epochs, train_dataloader, validation_dataloader, device, 
         validation_accuracies.append(val_accuracy['accuracy'])
     
     # plot the training and validation losses
-    plot_accuracies(train_accuracies, validation_accuracies)
+    return train_accuracies, validation_accuracies
   
-def plot_accuracies(train_accuracies, validation_accuracies):
+def plot_accuracies(train_accuracies, validation_accuracies, model_name='model'):
     """ Plot the training and validation accuracies
 
     :param list train_accuracies: list of training accuracies
     :param list validation_accuracies: list of validation accuracies
     :return None
     """
+    # Clear the plot
+    plt.clf()
     plt.plot(train_accuracies, label='train')
     plt.plot(validation_accuracies, label='validation')
     plt.xlabel('Epoch')
@@ -206,7 +209,7 @@ def plot_accuracies(train_accuracies, validation_accuracies):
     plt.xlim(0, len(train_accuracies) - 1)
     plt.title('Training and Validation Accuracy of Model')
     plt.legend()
-    plt.savefig('accuracy3.png')
+    plt.savefig(f"./figures/{model_name}.png")
 
 
 def pre_process(model_name, batch_size, device, small_subset):
@@ -276,6 +279,75 @@ def pre_process(model_name, batch_size, device, small_subset):
     pretrained_model.to(device)
     return pretrained_model, train_dataloader, validation_dataloader, test_dataloader
 
+def hyperparameter_tune(model_name, device, train_dataloader, validation_dataloader, test_dataloader, lrs = [1e-4, 5e-4, 1e-3], num_epochs = [5, 7, 9]):
+    best_val_accuracy = 0
+    best_model = None
+    best_lr = None
+    best_num_epoch = None
+
+    for lr in lrs:
+        for num_epoch in num_epochs:
+            print (f" >>>>>>>>  Starting training with lr={lr} and {num_epoch} epochs ... ")
+            print(f" >>>>>>>>  Starting training ... ")
+            # Create a new model for each hyperparameter combination and move to the device
+            pretrained_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+            pretrained_model.to(device)
+
+            train_accs, val_accs = train(pretrained_model, num_epoch, train_dataloader, validation_dataloader, device, lr)
+
+            # plot the training and validation accuracies
+            plot_accuracies(train_accs, val_accs, model_name=f"hptune-{model_name}-e{num_epoch}-lr{lr}")
+
+            # print the GPU memory usage just to make sure things are alright
+            print_gpu_memory()
+
+            val_accuracy = evaluate_model(pretrained_model, validation_dataloader, device)
+            print(f" - Average DEV metrics for model with lr:{lr} and {num_epoch} epochs: accuracy={val_accuracy}")
+
+            if val_accuracy['accuracy'] > best_val_accuracy:
+                best_val_accuracy = val_accuracy['accuracy']
+                best_model = pretrained_model
+                best_lr = lr
+                best_num_epoch = num_epoch
+
+    test_accuracy = evaluate_model(best_model, test_dataloader, device)
+    print(f" - Best TEST metrics: accuracy={test_accuracy}")
+    print(f" - Best hyperparameters: lr={best_lr}, num_epoch={best_num_epoch}")
+
+    return best_val_accuracy, test_accuracy
+
+def test_model(model_name, device, small_subset, batch_size = 256):
+    print(f" >>>>>>>>  Starting training with model_name={model_name} ... ")
+
+    while batch_size >= 0:
+        try:
+          print(f" >>>>>>>>  Starting training with batch_size={batch_size} ... ")
+          _, train_dataloader, validation_dataloader, test_dataloader = pre_process(model_name,
+                                                                                                    batch_size,
+                                                                                                    device,
+                                                                                                    small_subset)
+          
+          # Attempt to conduct hyperparameter tuning
+          best_val_accuracy, test_accuracy = hyperparameter_tune(model_name, device, train_dataloader, validation_dataloader, test_dataloader)
+
+          return best_val_accuracy, test_accuracy                                                                           
+        except RuntimeError as e:
+            print(f" >>>>>>>>  Error with batch_size={batch_size} ... ")
+            # Decrease batch size if there is an error
+            batch_size = batch_size // 2
+
+    return 0, 0
+            
+def plot_model_accuracies(model_names, accuracies, title):
+    # Create a bar plot for the accuracies and save it to a file
+    # Accuracy is in tuple form (0, 0) the first is dev accuracy and the second is test accuracy
+    plt.figure(figsize=(10, 5))
+    plt.bar(model_names, accuracies)
+    plt.title(title)
+    plt.xlabel("Model Name")
+    plt.ylabel("Accuracy")
+    plt.savefig(f"{title}.png")
+
 
 # the entry point of the program
 if __name__ == "__main__":
@@ -289,24 +361,61 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="distilbert-base-uncased")
 
     args = parser.parse_args()
+    
+    if args.experiment is None:
+        print("Please specify the experiment name")
+        exit(1)
+
     print(f"Specified arguments: {args}")
 
     assert type(args.small_subset) == bool, "small_subset must be a boolean"
 
+
+    if args.experiment == "models":
+        models = ["bert-base-cased", "roberta-base"]
+
+        model_df = pd.DataFrame(columns=["Model", "Dev Accuracy", "Test Accuracy"])
+
+        for model in models:
+            print(f" >>>>>>>>  Starting training with model_name={model} ... ")
+            # Test the model
+            best_val_accuracy, test_accuracy = test_model(model, args.device, args.small_subset)
+
+            # Add the results to the dataframe
+            model_df = model_df.append({"Model": model, "Dev Accuracy": best_val_accuracy, "Test Accuracy": test_accuracy}, ignore_index=True)
+
+            # Save the dataframe to a csv file
+            model_df.to_csv("model_accuracies.csv", index=False)
+
+        exit(0)
+        
+
     # load the data and models
     pretrained_model, train_dataloader, validation_dataloader, test_dataloader = pre_process(args.model,
-                                                                                             args.batch_size,
-                                                                                             args.device,
-                                                                                             args.small_subset)
+                                                                                              args.batch_size,
+                                                                                              args.device,
+                                                                                              args.small_subset)
 
-    print(" >>>>>>>>  Starting training ... ")
-    train(pretrained_model, args.num_epochs, train_dataloader, validation_dataloader, args.device, args.lr)
+    if args.experiment == "overfit":
+        print(" >>>>>>>>  Starting training ... ")
+        train_accs, val_accs = train(pretrained_model, args.num_epochs, train_dataloader, validation_dataloader, args.device, args.lr)
 
-    # print the GPU memory usage just to make sure things are alright
-    print_gpu_memory()
+        # plot the training and validation accuracies
+        plot_accuracies(train_accs, val_accs, model_name=f"{args.model}-e:{args.num_epochs}-lr:{args.lr}")
 
-    val_accuracy = evaluate_model(pretrained_model, validation_dataloader, args.device)
-    print(f" - Average DEV metrics: accuracy={val_accuracy}")
+        # print the GPU memory usage just to make sure things are alright
+        print_gpu_memory()
 
-    test_accuracy = evaluate_model(pretrained_model, test_dataloader, args.device)
-    print(f" - Average TEST metrics: accuracy={test_accuracy}")
+        val_accuracy = evaluate_model(pretrained_model, validation_dataloader, args.device)
+        print(f" - Average DEV metrics: accuracy={val_accuracy}")
+
+        test_accuracy = evaluate_model(pretrained_model, test_dataloader, args.device)
+        print(f" - Average TEST metrics: accuracy={test_accuracy}")
+
+    elif args.experiment == "hyper":
+        # Conduct hyperparameter search
+        best_val_acc, best_test_acc = test_model(args.model, args.device, args.small_subset, args.batch_size)
+
+        print(f" - Best validation accuracy: {best_val_acc}")
+        print(f" - Best test accuracy: {best_test_acc}")
+        
